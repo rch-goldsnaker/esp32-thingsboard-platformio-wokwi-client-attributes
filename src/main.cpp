@@ -3,19 +3,25 @@
 #include <ThingsBoard.h>
 #include <Attribute_Request.h>
 
+// WiFi Configuration
 constexpr char WIFI_SSID[] = "Wokwi-GUEST";
 constexpr char WIFI_PASSWORD[] = "";
-constexpr char TOKEN[] = "qrXSMGvV47EJHBq4BkDm";
+
+// ThingsBoard Configuration
+constexpr char TOKEN[] = "ub5CTYRPERBpDGyTJrHh";
 constexpr char THINGSBOARD_SERVER[] = "thingsboard.cloud";
 constexpr uint16_t THINGSBOARD_PORT = 1883U;
 
+// Hardware Pins
 #define LED_PIN 2
 #define BUTTON_PIN 0
 
+// ThingsBoard Attributes
 constexpr const char LED_STATE_ATTR[] = "ledState";
 constexpr size_t MAX_ATTRIBUTES = 3U;
 constexpr uint64_t REQUEST_TIMEOUT_MICROSECONDS = 5000U * 1000U;
 
+// Global Objects
 WiFiClient wifiClient;
 Arduino_MQTT_Client mqttClient(wifiClient);
 Attribute_Request<1U, MAX_ATTRIBUTES> attr_request;
@@ -23,27 +29,30 @@ const std::array<IAPI_Implementation *, 1U> apis = {&attr_request};
 ThingsBoard tb(mqttClient, 1024U, Default_Max_Stack_Size, apis);
 
 bool ledState = false;
-
 constexpr std::array<const char *, 1U> CLIENT_ATTRIBUTES_LIST = {LED_STATE_ATTR};
 
+// Process attributes received from ThingsBoard
 void processClientAttributes(const JsonObjectConst &data)
 {
   bool attributeFound = false;
+  
   for (auto it = data.begin(); it != data.end(); ++it)
   {
     if (strcmp(it->key().c_str(), LED_STATE_ATTR) == 0)
     {
       ledState = it->value().as<bool>();
       digitalWrite(LED_PIN, ledState);
-      Serial.print("LED restored: ");
+      
+      Serial.print("LED restored from server: ");
       Serial.println(ledState ? "ON" : "OFF");
       attributeFound = true;
+      break;
     }
   }
 
   if (!attributeFound)
   {
-    Serial.println("LED value not found on server, using current state");
+    Serial.println("LED state not found on server, using current local state");
   }
 }
 
@@ -54,10 +63,13 @@ void requestTimedOut()
 
 const Attribute_Request_Callback<MAX_ATTRIBUTES> attribute_client_request_callback(&processClientAttributes, REQUEST_TIMEOUT_MICROSECONDS, &requestTimedOut, CLIENT_ATTRIBUTES_LIST);
 
-void InitWiFi() {
+void InitWiFi() 
+{
   Serial.println("Connecting to WiFi...");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
+  
+  while (WiFi.status() != WL_CONNECTED) 
+  {
     delay(500);
     Serial.print(".");
   }
@@ -66,11 +78,14 @@ void InitWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-const bool reconnect() {
+const bool reconnect() 
+{
   const wl_status_t status = WiFi.status();
+  
   if (status == WL_CONNECTED) {
     return true;
   }
+  
   InitWiFi();
   return true;
 }
@@ -79,9 +94,13 @@ void toggleLed()
 {
   ledState = !ledState;
   digitalWrite(LED_PIN, ledState);
+  
   Serial.print("LED: ");
   Serial.println(ledState ? "ON" : "OFF");
-  tb.sendAttributeData(LED_STATE_ATTR, ledState);
+  
+  if (tb.connected()) {
+    tb.sendAttributeData(LED_STATE_ATTR, ledState);
+  }
 }
 
 void setup()
@@ -89,6 +108,10 @@ void setup()
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  
+  digitalWrite(LED_PIN, LOW);
+  ledState = false;
+  
   InitWiFi();
 }
 
@@ -97,6 +120,7 @@ void loop()
   // Check WiFi connection
   if (!reconnect())
   {
+    delay(1000);
     return;
   }
 
@@ -109,21 +133,29 @@ void loop()
     if (!tb.connect(THINGSBOARD_SERVER, TOKEN, THINGSBOARD_PORT))
     {
       Serial.println("Failed to connect to ThingsBoard!");
+      delay(5000);
       return;
     }
     
     Serial.println("Connected to ThingsBoard successfully!");
-    attr_request.Client_Attributes_Request(attribute_client_request_callback);
+    if (!attr_request.Client_Attributes_Request(attribute_client_request_callback)) {
+      Serial.println("Failed to request for client attributes");
+      return;
+    }
   }
   
   // Process ThingsBoard messages
   tb.loop();
 
-  if (digitalRead(BUTTON_PIN) == LOW)
+  // Handle button input
+  static bool lastButtonState = HIGH;
+  bool currentButtonState = digitalRead(BUTTON_PIN);
+  
+  if (lastButtonState == HIGH && currentButtonState == LOW)
   {
     toggleLed();
-    delay(200); // Simple delay to avoid multiple triggers
   }
-
-  delay(200);
+  
+  lastButtonState = currentButtonState;
+  delay(50);
 }
